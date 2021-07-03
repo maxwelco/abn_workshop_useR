@@ -3,3 +3,9 @@ install.packages("INLA", repos=c(getOption("repos"), INLA="https://inla.r-inla-d
 if (!requireNamespace("BiocManager", quietly = TRUE))
   install.packages("BiocManager")
 BiocManager::install("Rgraphviz")
+
+library(abn)
+library(INLA)
+library(BiocManager)
+library(Rgraphviz)
+library(rjags)

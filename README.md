@@ -1,2 +1,2 @@
 # abn_workshop_useR
-2021 useR! workshop
+Additive Bayesian Networks - 2021 useR! workshop
