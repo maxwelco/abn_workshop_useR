@@ -1,0 +1,185 @@
+---
+title: "Hands-on exercise: advanced features of ABN analysis - UseR! Conference"
+fontsize: 13pt
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    code_download: true
+bibliography: bib_advanced.bib
+csl: apa.csl
+---
+
+&nbsp;
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message=FALSE, collapse=FALSE,
+                      fig.align='center', fig.height=4, fig.width=10, comment = NA)
+
+options(scipen=999)
+
+quiet <- function(x) { 
+  sink(tempfile()) 
+  on.exit(sink()) 
+  invisible(force(x)) 
+} 
+
+## library
+library(knitr)
+library(kableExtra)
+library(abn)
+library(mcmcabn)
+
+## load data
+
+data("adg", package = "abn")
+
+adg <- adg %>% as.data.frame()
+
+drop <- which(colnames(dt)%in% c("pneum", "epg5", "worms", "farm"))
+
+```
+
+Below is the hands-on exercises on the advanced methods. This will cover the **heuristic search** and how to perform **Bayesian model averaging**.
+
+*Note: in the following text: Bayesian network, structure and DAG are synonyms.*
+
+
+# Heuristic search
+
+The `mostProbable()` function is limited to 20 to 25 nodes (if computed on a computing cluster even with a limited number of parent). Then for larger problem this approach becomes intractable form a computational point of view. The main advantages of the `mostProbable()` function is that the returned structure is the one that has the maximal possible score, thus it is called **exact** in that sense [@koivisto2004exact]. It compares all possible structure to select the optimal one. 
+
+The heuristic searches are techniques that tends to perform a greedy optimization. Then there is no guarantees to reach the maximum score. In this context greedy means: perform local optimization and hoping to get the overall maximum.
+
+We will use a Hill-Climber [@korb2010bayesian]. We need to set up the number of searches and the number of steps per searches. The starting point (here we choose a random Directed Acyclic Graph (DAG)). The rest of parameters is equivalent to the ones used in `buildscorecache()` function.
+
+```{r heuristic1, echo=TRUE, fig.width=10, fig.height=4}
+
+abndata <- adg %>%
+  dplyr::select(-farm) %>%
+  as.data.frame()
+
+abndata[,1:5] <- as.data.frame(lapply(abndata[,1:5], factor))
+dist <- list(AR = "binomial", pneumS = "binomial", female="binomial", 
+             livdam= "binomial", eggs = "binomial",wormCount = "poisson",
+             age= "gaussian", adg = "gaussian")
+
+#set maximum number of possible parent per node
+max.par <- 4
+
+# compute a cache of scores
+mycache <- buildScoreCache(data.df = (abndata), 
+                           data.dists = dist, 
+                           max.parents = max.par)
+
+# set number of searches and number of steps
+num.searches <- 200
+max.steps <- 150
+
+# Hill-climber
+heur.res <- quiet(searchHeuristic(score.cache = mycache,
+                           score = "mlik",
+                           data.dists = dist,
+                           max.parents = 4,
+                           start.dag = "random",
+                           num.searches = num.searches,
+                           max.steps = max.steps,
+                           seed = 3213,
+                           verbose = TRUE,
+                           algo = "hc"))
+
+# for comparison let us compute the maximum exact score
+mydag <- (mostProbable(score.cache = mycache))
+# alternatively you could use the precomputed "mydag" using:
+## load(mydag.Rdata) 
+
+fabn <- fitAbn(object = mydag)
+
+# plot Hill-Climber scores
+df.heur <- unlist(heur.res$scores)
+plot(NULL,lty=1, xlab="Index of heuristic search",ylab="BN score", ylim = c(min(unlist(df.heur)),max(unlist(df.heur))), xlim = c(0,num.searches))
+for(i in 1:num.searches){
+  if(sum(i==order(df.heur,decreasing = TRUE)[1:10])){
+    points(x=i,y=df.heur[i],type="p",pch=19, col=rgb(0,0,1, 0.8),lwd = 2)
+    }else{
+    points(x=i,y=df.heur[i],type="p",pch=19, col=rgb(0,0,0, 0.3))
+  }
+}
+points(x = max(unlist(df.heur)),y = max(unlist(df.heur)),col="red",pch=19)
+abline(h = fabn$mlik, col="red",lty = 3)
+
+```
+
+Above we plot the maximum scores after 150 steps out of 200 different searches of a Hill-Climber. The blues dotes are the 10 best searches. The red dashed line is the maximum possible score. 
+
+```{r heuristic2, echo=TRUE, fig.width=10, fig.height=4}
+# let us plot the evolution of scores during optimization
+Long <- (heur.res$detailed.score)
+Long.arr <- array(unlist(Long), dim = c(nrow(Long[[1]]), ncol(Long[[1]]), length(Long)))
+plot(NULL,lty=1, xlab="Number of Steps",ylab="BN score", ylim = c(min(unlist(df.heur)),max(unlist(df.heur))), xlim = c(0,max.steps))
+for(i in 1:num.searches){
+  if(sum(i==order(unlist(heur.res$scores),decreasing = TRUE)[1:10])){
+    points(x=1:(max.steps-1),y=Long.arr[1,,i],type="l",lty=1, col=rgb(0,0,1, 0.8),lwd = 2)
+    }else{
+    points(x=1:(max.steps-1),y=Long.arr[1,,i],type="l",lty=1, col=rgb(0,0,0, 0.25))
+  }
+}
+lines(x=1:(max.steps-1),y=Long.arr[1,,which.max(unlist(heur.res$scores))],type="l",col="red",lwd=3)
+abline(h = fabn$mlik, col="red",lty = 3)
+
+```
+Above we plot the scores in function of the steps for the 200 searches. The blue lines are the 10 best and the red one is **the** one that has the highest score. As one can see, in searches that work well the optimization is already good after 60 steps. This plot is a diagnostic plot used to set up the number of required steps. 
+
+# MCMC over the structures
+
+Usually, the output of a Bayesian network analysis of a dataset ends-up with a single well adjusted DAG. From the researcher point of view this could be frustrating. Indeed, the model is the one that is best supported by the data but the uncertainty quantification is missing. Classically in epidemiology, researchers are used to express point estimate with an uncertainty measure. An arc in a Bayesian network is a point estimate, we will see how to perform model averaging. The *link strength* measure is designed to account for that. An more natural alternative is to perform MCMC over structures [@friedman2003being]. 
+
+We use the `mcmcabn()` function on the cache of pre-computed networks scores. One needs to define the type of score used (here is the marginal likelihood `mlik`). The maximum of number of parents per node (same as the one used in `buildscorecache()`). The MCMC learning scheme, defined as: number of MCMC samples, number of thinned sampled (to avoid autocorrelation) and the length of the burn-in phase. Possibly a starting DAG and a structural prior. We also need to select the relative probability of performing radical moves (shuffling). Indeed, a naive MCMC approach is known to get very easily stuck in local maximum (for more details see: [@grzegorczyk2008improving;@su2016improving]). 
+
+```{r,eval=FALSE, echo=TRUE}
+mcmc.out <- mcmcabn(score.cache = mycache,
+                  score = "mlik",
+                  data.dists = dist,
+                  max.parents = 4,
+                  mcmc.scheme = c(1000,9,500),
+                  seed = 321,
+                  verbose = FALSE,
+                  start.dag = "random",
+                  prob.rev = 0.07,
+                  prob.mbr = 0.07,
+                  prior.choice = 1)
+```
+
+This is again computationally complex!
+
+Her is a plot of the MCMC samples. One can see the scores of the structures on the y-axis in function of the index steps. The dots are the radical moves. One the right side a histogram shows the number of structures with a given score. As one can see the histogram is very peaked on the maximum possible score. 
+
+```{r, fig.width=10, fig.height=4}
+load("mcmc.Rdata")
+plot(mcmc.out)
+```
+
+One can also display the cumulative maximum score (used for network score optimization).
+
+```{r, fig.width=10, fig.height=4}
+plot(mcmc.out,max.score=TRUE)
+```
+
+But the major advantage of this method is the possibility of querying the MCMC sample using a formula statement.
+
+```{r, echo=TRUE, eval=TRUE}
+# average individual arc support
+query(mcmcabn = mcmc.out)
+
+# probability that worm count being linked to age but not to female directly
+query(mcmcabn = mcmc.out,formula = ~wormCount|age-wormCount|female)
+
+# probability that worm count being directly linked to age and adg and that adg is link to age (undirected)
+query(mcmcabn = mcmc.out,formula = ~wormCount|age + wormCount|adg + age|adg)+
+  query(mcmcabn = mcmc.out,formula = ~wormCount|age + wormCount|adg + adg|age)
+```
+
+
+# References
+

@@ -1,0 +1,23 @@
+digraph dag { 
+
+"AR"[shape=square];
+"pneumS"[shape=square];
+"female"[shape=square];
+"livdam"[shape=square];
+"eggs"[shape=square];
+"wormCount"[shape=diamond];
+"age"[shape=oval];
+"adg"[shape=oval];
+
+
+
+"AR"->"wormCount";
+"female"->"age";
+"eggs"->"wormCount";
+"age"->"AR";
+"age"->"wormCount";
+"age"->"adg";
+"adg"->"eggs";
+"adg"->"wormCount";
+
+}
